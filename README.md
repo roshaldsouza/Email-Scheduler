@@ -91,27 +91,10 @@ We enforce a minimum delay (e.g., 2s) using BullMQ limiter and internal wait.
 We enforce per-sender hourly limits using Redis counters:
 - If hourly limit is reached, job is rescheduled into next hour window (no failure).
 - This ensures order and persistence.
-<img src="screenshots/login.jpeg" width="800" />
-<img src="screenshots/compose-email.jpeg" width="800" />
-<img src="screenshots/scheduled.jpeg" width="800" />
-<img src="screenshots/sent.jpeg" width="800" />
-
-
-### 📊 Login
-![Dashboard](screenshots/login.jpeg)
-
-### ✉️ Compose Email Modal
-![Compose](screenshots/compose-email.jpeg)
-
-### 🕒 Scheduled Emails
-![Scheduled](screenshots/scheduled.jpeg)
-
-### ✅ Sent Emails
-![Sent](screenshots/sent.jpeg)
-
-### ⚙️ Worker Logs (Rate Limit + Reschedule)
-![Worker Logs](screenshots/logs.jpeg)
----
+<img src="screenshots/login.jpeg" width="400" />
+<img src="screenshots/compose-email.jpeg" width="400" />
+<img src="screenshots/scheduled.jpeg" width="400" />
+<img src="screenshots/sent.jpeg" width="400" />
 
 ## 🛠 Getting Started
 
