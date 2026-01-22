@@ -148,7 +148,6 @@ SMTP_PASS=
 NEXT_PUBLIC_GOOGLE_CLIENT_ID=
 NEXT_PUBLIC_API_URL=http://localhost:5000
 
-Demo video: https://drive.google.com/file/d/1CLbbkHZYv5B90PPuCk4aaXWyoWPU7k8P/view?usp=sharing
 
 
 🙌 Summary
