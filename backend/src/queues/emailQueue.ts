@@ -1,8 +1,6 @@
 import { Queue } from "bullmq";
+import { bullConnection } from "../config/redis";
 
 export const emailQueue = new Queue("emailQueue", {
-  connection: {
-    host: "localhost",
-    port: 6379,
-  },
+  connection: bullConnection,
 });

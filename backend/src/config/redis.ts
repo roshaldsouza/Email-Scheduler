@@ -1,9 +1,28 @@
-import { Redis } from "ioredis";
+import IORedis from "ioredis";
 
-export const redisConnection = {
-  host: process.env.REDIS_HOST || "127.0.0.1",
-  port: Number(process.env.REDIS_PORT || 6379),
+const redisUrl = process.env.REDIS_URL;
+if (!redisUrl) throw new Error("REDIS_URL missing in .env");
+
+// Parse the Redis URL to extract components
+const url = new URL(redisUrl);
+const host = url.hostname;
+const port = parseInt(url.port) || 6379;
+const password = url.password;
+
+console.log(`🔗 Connecting to Redis at ${host}:${port}`);
+
+// for counters / custom redis ops
+export const counterRedis = new IORedis(redisUrl, {
+  maxRetriesPerRequest: null,
+  retryStrategy: (times) => Math.min(times * 100, 3000),
+  connectTimeout: 10000, // 10 second timeout
+});
+
+// for BullMQ Queue + Worker connection - use parsed values
+export const bullConnection = {
+  host,
+  port,
+  password,
+  tls: {}, // ✅ important for Upstash (rediss)
+  maxRetriesPerRequest: null,
 };
-
-// Optional helper if you need direct Redis client for counters
-export const redisClient = new Redis(redisConnection);

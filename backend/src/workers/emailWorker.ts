@@ -1,20 +1,16 @@
-import { Worker, Job } from "bullmq";
-import IORedis from "ioredis";
+import { Worker, Job, Queue } from "bullmq";
 import { prisma } from "../config/prisma";
 import { sendMail } from "../services/mailer";
+import { bullConnection, counterRedis } from "../config/redis";
 
 const CONCURRENCY = Number(process.env.WORKER_CONCURRENCY || 5);
 const MIN_DELAY_MS = Number(process.env.MIN_DELAY_BETWEEN_EMAILS_MS || 2000);
 const MAX_PER_HOUR = Number(process.env.MAX_EMAILS_PER_HOUR_PER_SENDER || 50);
 
-// Redis instance ONLY for counters (rate limiting)
-const redis = new IORedis(process.env.REDIS_URL || "redis://localhost:6379");
-
-// BullMQ connection object
-const bullConnection = {
-  host: "localhost",
-  port: 6379,
-};
+// Create queue instance for re-scheduling
+const emailQueue = new Queue("emailQueue", {
+  connection: bullConnection,
+});
 
 // ---------- Redis Helpers ----------
 function getHourWindowKey(fromEmail: string) {
@@ -34,10 +30,10 @@ function msUntilNextHourUTC() {
 async function allowSendThisHour(fromEmail: string, limit: number) {
   const key = getHourWindowKey(fromEmail);
 
-  const count = await redis.incr(key);
+  const count = await counterRedis.incr(key);
 
   if (count === 1) {
-    await redis.expire(key, 60 * 60);
+    await counterRedis.expire(key, 60 * 60);
   }
 
   return { allowed: count <= limit, count };
@@ -53,7 +49,7 @@ export const emailWorker = new Worker(
     };
 
     if (!recipientId) {
-      console.log("⚠️ Job missing recipientId:", job.id);
+      console.log("⚠️ Missing recipientId in job:", job.id);
       return;
     }
 
@@ -63,38 +59,33 @@ export const emailWorker = new Worker(
     });
 
     if (!recipient) {
-      console.log(`⚠️ Recipient not found: ${recipientId}`);
+      console.log("⚠️ Recipient not found:", recipientId);
       return;
     }
 
-    // idempotency
+    // ✅ idempotency
     if (recipient.status === "sent") {
-      console.log(`🟡 Already sent (skip): recipient=${recipientId}`);
+      console.log("🟡 Already sent, skipping:", recipient.toEmail);
       return;
     }
 
     const fromEmail = recipient.emailJob.fromEmail;
     const limit = hourlyLimit ?? MAX_PER_HOUR;
 
-    console.log(
-      `📌 Processing job=${job.id} recipient=${recipient.toEmail} sender=${fromEmail}`
-    );
-
-    await prisma.emailRecipient.update({
-      where: { id: recipientId },
-      data: { status: "processing" },
-    });
-
-    // Hourly limit check
+    // Hourly limit check (Redis counter)
     const { allowed, count } = await allowSendThisHour(fromEmail, limit);
 
     if (!allowed) {
       const delayMs = msUntilNextHourUTC() + 1000;
-      const nextRun = new Date(Date.now() + delayMs).toLocaleString();
 
       console.log(
-        `⏳ RATE LIMIT HIT (${count}/${limit}) sender=${fromEmail} -> rescheduling recipient=${recipient.toEmail} at ${nextRun}`
+        `⏳ RATE LIMIT HIT (${count}/${limit}) sender=${fromEmail} -> reschedule in ${Math.round(
+          delayMs / 1000
+        )}s`
       );
+
+      // Decrement the counter since we're not actually sending
+      await counterRedis.decr(getHourWindowKey(fromEmail));
 
       await prisma.emailRecipient.update({
         where: { id: recipientId },
@@ -104,24 +95,43 @@ export const emailWorker = new Worker(
         },
       });
 
-      await job.moveToDelayed(Date.now() + delayMs);
+      // Re-add to queue with delay
+      await emailQueue.add(
+        "send-email",
+        { recipientId, hourlyLimit },
+        {
+          jobId: `recipient-${recipientId}`, // Same jobId pattern as initial scheduling
+          delay: delayMs,
+          removeOnComplete: true,
+          removeOnFail: false,
+        }
+      );
+
+      console.log(`✅ Rescheduled ${recipient.toEmail} for ${new Date(Date.now() + delayMs).toLocaleTimeString()}`);
+      
+      // Complete this job successfully
       return;
     }
 
-    // Send email
-    try {
-      console.log(
-        `📩 Sending email -> to=${recipient.toEmail} | subject="${recipient.emailJob.subject}"`
-      );
+    // mark processing
+    await prisma.emailRecipient.update({
+      where: { id: recipientId },
+      data: { status: "processing" },
+    });
 
-      await sendMail({
+    try {
+      console.log(`📩 Sending -> ${recipient.toEmail} (${count}/${limit})`);
+
+      const result = await sendMail({
         from: fromEmail,
         to: recipient.toEmail,
         subject: recipient.emailJob.subject,
         html: recipient.emailJob.body,
       });
 
-      await prisma.emailRecipient.update({
+      console.log(`📧 Email sent! Preview: ${result.previewUrl}`);
+
+      const updated = await prisma.emailRecipient.update({
         where: { id: recipientId },
         data: {
           status: "sent",
@@ -129,9 +139,9 @@ export const emailWorker = new Worker(
         },
       });
 
-      console.log(`✅ SENT SUCCESS -> ${recipient.toEmail}`);
+      console.log(`✅ SENT -> ${recipient.toEmail} | DB Status: ${updated.status}`);
     } catch (err) {
-      console.log(`❌ SEND FAILED -> ${recipient.toEmail}`, err);
+      console.log(`❌ FAILED -> ${recipient.toEmail}`, err);
 
       await prisma.emailRecipient.update({
         where: { id: recipientId },
@@ -145,7 +155,7 @@ export const emailWorker = new Worker(
     connection: bullConnection,
     concurrency: CONCURRENCY,
 
-    // throttle: min delay between sends (safe across workers)
+    // min delay between sends (throttling)
     limiter: {
       max: 1,
       duration: MIN_DELAY_MS,
@@ -159,4 +169,8 @@ emailWorker.on("completed", (job) => {
 
 emailWorker.on("failed", (job, err) => {
   console.log(`💥 Job failed: ${job?.id}`, err.message);
+});
+
+emailWorker.on("error", (err) => {
+  console.error("❌ Worker error:", err);
 });
