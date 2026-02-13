@@ -1,4 +1,4 @@
-# 📬 Email Scheduler (ReachInbox Assignment)
+# 📬 Email Scheduler
 
 This repository contains a **production-grade Email Scheduling System** built with:
 - **Express + TypeScript** backend
